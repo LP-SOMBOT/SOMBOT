@@ -100,7 +100,7 @@ jobs:
 
 > DEVELOPER OF SOMBOT-MD 
 - [ LP ](https://github.com/LP-SOMBOT)
-- Creater and Owner Of LITE-MD
+- 
 
 ---
 <a><img src='https://i.imgur.com/LyHic3i.gif'/>
