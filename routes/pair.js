@@ -9,23 +9,22 @@ import { join } from 'path';
 import fs from 'fs-extra';
 import { randomBytes } from 'crypto';
 import { Boom } from '@hapi/boom';
+import pino from 'pino'; // Import pino for proper logging
 
 const router = Router();
 const SESSIONS_DIR = join(process.cwd(), 'sessions');
 
-// Function to encode session files
+// This function encodes the entire session directory for maximum compatibility
 async function encodeSession(sessionId) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
-  console.log(`[Step 3] Encoding session from: ${sessionDir}`);
+  console.log(`[Step 3] Encoding all session files from: ${sessionDir}`);
   try {
     const files = await fs.readdir(sessionDir);
-    // We only need creds.json for the session string
-    if (!files.includes('creds.json')) {
-        throw new Error('creds.json not found in session directory');
+    const sessionData = {};
+    for (const file of files) {
+      const content = await fs.readFile(join(sessionDir, file));
+      sessionData[file] = content.toString('base64');
     }
-    const credsContent = await fs.readFile(join(sessionDir, 'creds.json'));
-    // Create a simplified session object for encoding
-    const sessionData = { 'creds.json': credsContent.toString('base64') };
     const fullSessionString = `botname~:${Buffer.from(JSON.stringify(sessionData)).toString('base64')}`;
     console.log('[Step 3] Session encoded successfully.');
     return fullSessionString;
@@ -56,10 +55,14 @@ router.get('/', async (req, res) => {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     console.log(`[Step 1] Initializing socket for session: ${sessionId}`);
 
+    // Use a proper, silent pino logger for stability
+    const logger = pino({ level: 'silent' });
+
     sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      browser: Browsers.ubuntu("Chrome")
+      browser: Browsers.macOS("Chrome"), // Use a very standard browser identity
+      logger, // Provide the logger to Baileys
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -69,30 +72,33 @@ router.get('/', async (req, res) => {
       console.log(`[Connection Update] Status: ${connection}`);
 
       if (connection === "open") {
-        // --- THIS IS THE CRITICAL CHANGE ---
-        // Act immediately without any delay to prevent timeouts
-        console.log('[Step 2] Connection successful. Immediately processing session...');
+        console.log('[Step 2] Connection successful. Waiting 2s for files to sync...');
+        await delay(2000); // Wait for file system to sync
 
         const sessionString = await encodeSession(sessionId);
         if (!sessionString) {
           console.error("[Fatal] Could not generate session string after connection.");
-          await sock.logout(); // Logout on failure
+          await sock.logout();
           return;
         }
 
-        const welcomeMessage = `✅ *Your Session ID is Ready!*\n\n*Warning:* Do not share this code with anyone.\n\nCopy the text below and paste it into your bot's environment variables (SESSION_ID).`;
-        
+        console.log('[Step 4] Attempting to send session string to user...');
         await sock.sendMessage(sock.user.id, { text: sessionString });
+        
+        const welcomeMessage = `✅ *Your Session ID is Ready!*\n\n*Warning:* Do not share this code with anyone.\n\nCopy the text below and paste it into your bot's environment variables (SESSION_ID).`;
         await sock.sendMessage(sock.user.id, { text: welcomeMessage });
         
-        console.log('[Step 4] Session ID has been sent to the user.');
-        
-        // Logout after a short delay to ensure messages are sent
-        await delay(1000); 
+        console.log('[Step 5] Session sent. Logging out in 3s...');
+        await delay(3000); // Wait for messages to deliver
         await sock.logout();
+
       } else if (connection === "close") {
-        const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
-        console.log(`[Connection Closed] Reason: ${DisconnectReason[statusCode] || 'Unknown'}, Status Code: ${statusCode}`);
+        const boomError = lastDisconnect?.error instanceof Boom ? lastDisconnect.error : new Error('Unknown disconnection error');
+        const statusCode = boomError.output?.statusCode;
+        
+        // Log the detailed error
+        console.error(`[Connection Closed] Reason: ${DisconnectReason[statusCode] || 'Unknown'}. Full Error:`, boomError);
+        
         await fs.remove(sessionPath);
         console.log('[Cleanup] Session directory deleted.');
       }
@@ -100,7 +106,7 @@ router.get('/', async (req, res) => {
 
     if (!sock.authState.creds.registered) {
       console.log(`[Step 1.5] Requesting pairing code for: ${sanitizedNumber}...`);
-      await delay(1500);
+      await delay(1500); // Give socket time to be ready
       const code = await sock.requestPairingCode(sanitizedNumber);
       console.log(`[Info] Generated Pairing Code: ${code}`);
       if (!res.headersSent) {
@@ -109,7 +115,7 @@ router.get('/', async (req, res) => {
     }
 
   } catch (err) {
-    console.error("[FATAL ERROR] An uncaught exception occurred:", err);
+    console.error("[FATAL ERROR] An uncaught exception occurred in the main block:", err);
     await fs.remove(sessionPath);
     if (!res.headersSent) {
       res.status(500).json({ error: "Service is unavailable or an error occurred." });
