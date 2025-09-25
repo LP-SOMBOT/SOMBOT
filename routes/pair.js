@@ -1,4 +1,3 @@
-
 import { Router } from 'express';
 import makeWASocket, {
   useMultiFileAuthState,
@@ -17,6 +16,7 @@ const SESSIONS_DIR = join(process.cwd(), 'sessions');
 // Function to encode session files into a single base64 string
 async function encodeSession(sessionId) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
+  console.log(`[Step 3] Encoding session from directory: ${sessionDir}`);
   try {
     const files = await fs.readdir(sessionDir);
     const sessionData = {};
@@ -24,8 +24,8 @@ async function encodeSession(sessionId) {
       const content = await fs.readFile(join(sessionDir, file));
       sessionData[file] = content.toString('base64');
     }
-    // Format: botname~:BASE64_ENCODED_JSON_STRING
     const fullSessionString = `botname~:${Buffer.from(JSON.stringify(sessionData)).toString('base64')}`;
+    console.log('[Step 3] Session encoded successfully.');
     return fullSessionString;
   } catch (error) {
     console.error('Error encoding session:', error);
@@ -35,98 +35,85 @@ async function encodeSession(sessionId) {
 
 // Main pairing route
 router.get('/', async (req, res) => {
-  // Use 'number' from query to match your example
-  let phoneNumber = req.query.number || req.query.phone;
-  if (!phoneNumber) {
-    return res.status(400).json({ error: "Phone number is required. Use '?number=1234567890'." });
-  }
-  phoneNumber = phoneNumber.replace(/[^0-9]/g, ''); // Sanitize the number
+  console.log('[Request Received] Starting pairing process...');
+  const phoneNumber = req.query.number || req.query.phone;
 
+  if (!phoneNumber) {
+    console.error('[Error] Phone number is missing from the request URL.');
+    return res.status(400).json({ 
+      error: "Phone number is required. Please use the homepage or format your URL like: /pair?number=1234567890" 
+    });
+  }
+
+  const sanitizedNumber = phoneNumber.replace(/[^0-9]/g, '');
   const sessionId = `session-${randomBytes(8).toString('hex')}`;
   const sessionPath = join(SESSIONS_DIR, sessionId);
+  console.log(`[Info] Session ID: ${sessionId}, Number: ${sanitizedNumber}`);
 
-  const connect = async () => {
+  let sock;
+  try {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    let sock;
+    console.log('[Step 1] Initializing Baileys socket...');
 
-    try {
-      sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: false,
-        browser: Browsers.macOS("Safari"),
-        logger: { info: () => {}, warn: () => {}, error: () => {} } // Suppress verbose logging
-      });
+    sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: false,
+      browser: Browsers.macOS("Safari")
+      // The incompatible logger has been REMOVED from here
+    });
 
-      // Handle pairing code request
-      if (!sock.authState.creds.registered) {
-        console.log(`Requesting pairing code for: ${phoneNumber}`);
-        await delay(1500); // Small delay to ensure the socket is ready
-        const code = await sock.requestPairingCode(phoneNumber);
-        // Send code back to the client as JSON
-        if (!res.headersSent) {
-          res.status(200).json({ code });
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect } = update;
+      console.log(`[Connection Update] Status: ${connection}`);
+
+      if (connection === "open") {
+        console.log('[Step 2] Connection successful. Sending session to user...');
+        await delay(5000);
+
+        const sessionString = await encodeSession(sessionId);
+        if (!sessionString) {
+          console.error("[Fatal] Could not generate session string after successful connection.");
+          return;
         }
-        console.log(`Pairing Code: ${code}`);
+
+        const welcomeMessage = `✅ *Your Session ID is Ready!*\n\n*Warning:* Do not share this code with anyone.\n\nCopy the text below and paste it into your bot's environment variables (SESSION_ID).`;
+        
+        await sock.sendMessage(sock.user.id, { text: sessionString });
+        await sock.sendMessage(sock.user.id, { text: welcomeMessage });
+        
+        console.log('[Step 4] Session ID sent to user via WhatsApp.');
+
+        await delay(2000);
+        await sock.logout();
+
+      } else if (connection === "close") {
+        const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
+        console.log(`[Connection Closed] Reason: ${DisconnectReason[statusCode] || 'Unknown'}, Status Code: ${statusCode}`);
+        
+        await fs.remove(sessionPath);
+        console.log('[Cleanup] Session directory deleted.');
       }
+    });
 
-      sock.ev.on('creds.update', saveCreds);
-
-      sock.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect } = update;
-
-        if (connection === "open") {
-          console.log(`Connection opened for ${phoneNumber}. Generating session...`);
-          await delay(5000); // Wait for 5 seconds to ensure all credentials are saved
-
-          const sessionString = await encodeSession(sessionId);
-          if (!sessionString) {
-              console.error("Failed to generate session string.");
-              return;
-          }
-
-          console.log(`Session ID Generated: ${sessionString.substring(0, 30)}...`);
-
-          const welcomeMessage = `
-🎉 *Welcome to Your WhatsApp Bot!* 🚀  
-
-🔒 *Your Session ID is ready!*
-⚠️ _Keep it private and secure — do not share it with anyone._
-
-🔑 *Copy the SESSION_ID below* and add it to your bot's environment variables.
-
-⭐ *Show Some Love!* Give a ⭐ on GitHub to support the developer.
-
-🚀 _Thanks for using our service — Let the automation begin!_ ✨`;
-
-          await sock.sendMessage(sock.user.id, { text: sessionString });
-          await sock.sendMessage(sock.user.id, { text: welcomeMessage });
-          
-          console.log('Session ID and welcome message sent to user.');
-
-          await delay(2000);
-          await sock.logout();
-        } else if (connection === "close") {
-            const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
-            if (statusCode && statusCode !== DisconnectReason.loggedOut) {
-                console.log('Connection closed due to an error. Reconnecting...');
-                connect(); // Reconnect on non-logout errors
-            } else {
-                console.log('Connection closed. Cleaning up...');
-            }
-            // Always clean up the session directory on close
-            await fs.remove(sessionPath);
-        }
-      });
-    } catch (err) {
-      console.error("An error occurred during the pairing process:", err);
-      await fs.remove(sessionPath); // Clean up on failure
+    if (!sock.authState.creds.registered) {
+      console.log(`[Step 1.5] Requesting pairing code for ${sanitizedNumber}...`);
+      await delay(1500);
+      const code = await sock.requestPairingCode(sanitizedNumber);
+      console.log(`[Info] Pairing Code: ${code}`);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Service is unavailable or an error occurred." });
+        res.status(200).json({ code });
       }
     }
-  };
 
-  await connect();
+  } catch (err) {
+    console.error("[FATAL ERROR] An uncaught exception occurred:", err);
+    await fs.remove(sessionPath);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Service is unavailable or an error occurred." });
+    }
+  }
 });
 
 export default router;
