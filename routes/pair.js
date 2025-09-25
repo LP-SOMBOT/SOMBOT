@@ -3,7 +3,8 @@ import makeWASocket, {
   useMultiFileAuthState,
   delay,
   Browsers,
-  DisconnectReason
+  DisconnectReason,
+  makeCacheableSignalKeyStore // KEY CHANGE #1: Import the correct key store
 } from '@whiskeysockets/baileys';
 import { join } from 'path';
 import fs from 'fs-extra';
@@ -13,21 +14,18 @@ import pino from 'pino';
 
 const router = Router();
 const SESSIONS_DIR = join(process.cwd(), 'sessions');
-
-// --- NEW: A Map to store active pairing sockets ---
 const activeSockets = new Map();
 
+// KEY CHANGE #2: This function now ONLY encodes creds.json, just like the working example.
 async function encodeSession(sessionId) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
-  console.log(`[Step 3] Encoding all session files from: ${sessionDir}`);
+  const credsFile = join(sessionDir, 'creds.json');
+  console.log(`[Step 3] Encoding session from file: ${credsFile}`);
   try {
-    const files = await fs.readdir(sessionDir);
-    const sessionData = {};
-    for (const file of files) {
-      const content = await fs.readFile(join(sessionDir, file));
-      sessionData[file] = content.toString('base64');
-    }
-    return `botname~:${Buffer.from(JSON.stringify(sessionData)).toString('base64')}`;
+    const credsContent = await fs.readFile(credsFile);
+    const base64Creds = credsContent.toString('base64');
+    // Using the same format "botname~:" for compatibility.
+    return `botname~:${base64Creds}`;
   } catch (error) {
     console.error('Error encoding session:', error);
     return null;
@@ -45,31 +43,32 @@ router.get('/', async (req, res) => {
   const sessionId = `session-${randomBytes(8).toString('hex')}`;
   const sessionPath = join(SESSIONS_DIR, sessionId);
 
-  // --- NEW: Logic to handle existing sockets ---
   if (activeSockets.has(sanitizedNumber)) {
-    console.log(`[Info] A pairing process for ${sanitizedNumber} already exists. Terminating the old one.`);
+    console.log(`[Info] Terminating old pairing process for ${sanitizedNumber}.`);
     try {
-      const oldSocket = activeSockets.get(sanitizedNumber);
-      await oldSocket.logout();
+      await activeSockets.get(sanitizedNumber).logout();
     } catch (e) {
-      console.log("Old socket was already closed or failed to logout.");
+      console.log("Old socket was already closed.");
     }
   }
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const logger = pino({ level: 'silent' });
+    // KEY CHANGE #3: Replicate the exact logger structure.
+    const logger = pino({ level: 'fatal' }).child({ level: 'fatal' });
 
     const sock = makeWASocket({
-      auth: state,
+      auth: {
+        creds: state.creds,
+        // KEY CHANGE #1 (Implementation): Use the stable key store method.
+        keys: makeCacheableSignalKeyStore(state.keys, logger),
+      },
       printQRInTerminal: false,
       browser: Browsers.macOS("Chrome"),
       logger,
     });
     
-    // Store the new socket in our active sessions map
     activeSockets.set(sanitizedNumber, sock);
-
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on("connection.update", async (update) => {
@@ -77,8 +76,9 @@ router.get('/', async (req, res) => {
       console.log(`[Connection Update] Number: ${sanitizedNumber}, Status: ${connection}`);
 
       if (connection === "open") {
-        console.log('[Step 2] Connection successful. Waiting 2s for files to sync...');
-        await delay(2000);
+        // KEY CHANGE #4: Re-introduce the long delay to ensure file is written.
+        console.log('[Step 2] Connection successful. Waiting 5s for creds.json to sync...');
+        await delay(5000);
 
         const sessionString = await encodeSession(sessionId);
         if (!sessionString) {
@@ -90,17 +90,14 @@ router.get('/', async (req, res) => {
         await sock.sendMessage(sock.user.id, { text: sessionString });
         await sock.sendMessage(sock.user.id, { text: `✅ *Your Session ID is Ready!*` });
         
-        console.log('[Step 5] Session sent. Logging out in 3s...');
-        await delay(3000);
+        console.log('[Step 5] Session sent. Logging out in 2s...');
+        await delay(2000);
         await sock.logout();
       } else if (connection === "close") {
         const boomError = lastDisconnect?.error instanceof Boom ? lastDisconnect.error : new Error('Unknown disconnection error');
         console.error(`[Connection Closed] Number: ${sanitizedNumber}, Reason:`, boomError.message);
-        
-        // --- CRITICAL: Clean up on close ---
         activeSockets.delete(sanitizedNumber);
         await fs.remove(sessionPath);
-        console.log('[Cleanup] Active socket and session directory deleted.');
       }
     });
 
@@ -116,11 +113,8 @@ router.get('/', async (req, res) => {
 
   } catch (err) {
     console.error("[FATAL ERROR] An uncaught exception occurred:", err);
-    
-    // --- CRITICAL: Clean up on failure ---
     activeSockets.delete(sanitizedNumber);
     await fs.remove(sessionPath);
-    
     if (!res.headersSent) {
       res.status(500).json({ error: "Service is unavailable or an error occurred." });
     }
