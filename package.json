@@ -1,19 +1,19 @@
-
 {
   "name": "whatsapp-session-generator",
   "version": "1.0.0",
-  "description": "Generate Baileys session strings via Pairing Code.",
+  "description": "A stable Baileys session generator.",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.2",
-    "express": "^4.19.2",
-    "fs-extra": "^11.2.0"
+    "@whiskeysockets/baileys": "github:XdKing2/Malvin-Baileys",
+    "express": "^4.18.2",
+    "fs-extra": "^11.2.0",
+    "pino": "^8.1.0"
   },
   "engines": {
-    "node": "22.x"
+    "node": ">=20.0.0"
   }
 }
