@@ -1,25 +1,25 @@
 const express = require('express');
-const { fileURLToPath } = require('url');
-const { dirname, join } = require('path');
+const path = require('path'); // Use the 'path' module for file paths
 const fs = require('fs-extra');
 const pairRoute = require('./routes/pair.js');
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-fs.ensureDirSync(join(__dirname, 'sessions'));
+// In a CommonJS environment (which we are now using), __dirname is a
+// global variable that Node.js provides automatically. We don't need to define it.
 
-app.use(express.static('public'));
+// Use path.join to safely create paths to your folders.
+fs.ensureDirSync(path.join(__dirname, 'sessions'));
+app.use(express.static(path.join(__dirname, 'public')));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use('/pair', pairRoute);
 
 app.get('/', (req, res) => {
-  res.sendFile(join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(port, () => {
