@@ -136,7 +136,7 @@
 
         <form id="pairing-form">
             <div class="input-group">
-                <input type="text" id="phone-input" placeholder="e.g., 254712345678" required>
+                <input type="tel" id="phone-input" placeholder="e.g., 254712345678" required>
             </div>
             <button type="submit" id="generate-btn">Generate Code</button>
         </form>
@@ -158,6 +158,11 @@
         const copyBtn = document.getElementById('copy-btn');
         const statusMessage = document.getElementById('status-message');
 
+        // --- NEW: Live input validation ---
+        phoneInput.addEventListener('input', () => {
+            phoneInput.value = phoneInput.value.replace(/[^0-9]/g, '');
+        });
+
         pairingForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const phoneNumber = phoneInput.value.trim();
@@ -167,18 +172,17 @@
                 return;
             }
 
-            // UI updates for loading state
             generateBtn.disabled = true;
             generateBtn.textContent = 'Generating...';
             statusMessage.textContent = 'Requesting code from WhatsApp...';
             resultContainer.style.display = 'none';
 
             try {
+                // The backend now handles the session logic correctly
                 const response = await fetch(`/pair?number=${phoneNumber}`);
                 const data = await response.json();
 
                 if (response.ok && data.code) {
-                    // Format code for better readability
                     const code = data.code.replace(/./g, (c, i) => i && i % 4 === 0 ? `-${c}` : c);
                     pairingCodeEl.textContent = code;
                     resultContainer.style.display = 'block';
@@ -189,14 +193,13 @@
             } catch (error) {
                 statusMessage.textContent = `Error: ${error.message}`;
             } finally {
-                // Restore button
                 generateBtn.disabled = false;
                 generateBtn.textContent = 'Generate Code';
             }
         });
         
         copyBtn.addEventListener('click', () => {
-            const codeToCopy = pairingCodeEl.textContent.replace(/-/g, ''); // Copy without hyphens
+            const codeToCopy = pairingCodeEl.textContent.replace(/-/g, '');
             navigator.clipboard.writeText(codeToCopy).then(() => {
                 copyBtn.textContent = 'Copied!';
                 setTimeout(() => {
@@ -204,7 +207,6 @@
                 }, 2000);
             });
         });
-
     </script>
 </body>
 </html>
