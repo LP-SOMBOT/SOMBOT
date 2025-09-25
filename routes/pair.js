@@ -13,10 +13,10 @@ import { Boom } from '@hapi/boom';
 const router = Router();
 const SESSIONS_DIR = join(process.cwd(), 'sessions');
 
-// Function to encode session files into a single base64 string
+// Function to encode session files
 async function encodeSession(sessionId) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
-  console.log(`[Step 3] Encoding session from directory: ${sessionDir}`);
+  console.log(`[Step 3] Encoding session from: ${sessionDir}`);
   try {
     const files = await fs.readdir(sessionDir);
     const sessionData = {};
@@ -39,27 +39,26 @@ router.get('/', async (req, res) => {
   const phoneNumber = req.query.number || req.query.phone;
 
   if (!phoneNumber) {
-    console.error('[Error] Phone number is missing from the request URL.');
+    console.error('[Error] Phone number missing from URL.');
     return res.status(400).json({ 
-      error: "Phone number is required. Please use the homepage or format your URL like: /pair?number=1234567890" 
+      error: "Phone number is required. Format: /pair?number=1234567890" 
     });
   }
 
   const sanitizedNumber = phoneNumber.replace(/[^0-9]/g, '');
   const sessionId = `session-${randomBytes(8).toString('hex')}`;
   const sessionPath = join(SESSIONS_DIR, sessionId);
-  console.log(`[Info] Session ID: ${sessionId}, Number: ${sanitizedNumber}`);
 
   let sock;
   try {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    console.log('[Step 1] Initializing Baileys socket...');
+    console.log(`[Step 1] Initializing socket for session: ${sessionId}`);
 
     sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      browser: Browsers.macOS("Safari")
-      // The incompatible logger has been REMOVED from here
+      // Using a more common browser identity for better stability
+      browser: Browsers.ubuntu("Chrome")
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -74,7 +73,7 @@ router.get('/', async (req, res) => {
 
         const sessionString = await encodeSession(sessionId);
         if (!sessionString) {
-          console.error("[Fatal] Could not generate session string after successful connection.");
+          console.error("[Fatal] Could not generate session string.");
           return;
         }
 
@@ -83,25 +82,23 @@ router.get('/', async (req, res) => {
         await sock.sendMessage(sock.user.id, { text: sessionString });
         await sock.sendMessage(sock.user.id, { text: welcomeMessage });
         
-        console.log('[Step 4] Session ID sent to user via WhatsApp.');
-
+        console.log('[Step 4] Session ID sent to user.');
         await delay(2000);
         await sock.logout();
 
       } else if (connection === "close") {
         const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
         console.log(`[Connection Closed] Reason: ${DisconnectReason[statusCode] || 'Unknown'}, Status Code: ${statusCode}`);
-        
         await fs.remove(sessionPath);
         console.log('[Cleanup] Session directory deleted.');
       }
     });
 
     if (!sock.authState.creds.registered) {
-      console.log(`[Step 1.5] Requesting pairing code for ${sanitizedNumber}...`);
+      console.log(`[Step 1.5] Requesting pairing code for sanitized number: ${sanitizedNumber}...`);
       await delay(1500);
       const code = await sock.requestPairingCode(sanitizedNumber);
-      console.log(`[Info] Pairing Code: ${code}`);
+      console.log(`[Info] Generated Pairing Code: ${code}`);
       if (!res.headersSent) {
         res.status(200).json({ code });
       }
