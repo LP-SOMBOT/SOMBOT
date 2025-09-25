@@ -19,11 +19,13 @@ async function encodeSession(sessionId) {
   console.log(`[Step 3] Encoding session from: ${sessionDir}`);
   try {
     const files = await fs.readdir(sessionDir);
-    const sessionData = {};
-    for (const file of files) {
-      const content = await fs.readFile(join(sessionDir, file));
-      sessionData[file] = content.toString('base64');
+    // We only need creds.json for the session string
+    if (!files.includes('creds.json')) {
+        throw new Error('creds.json not found in session directory');
     }
+    const credsContent = await fs.readFile(join(sessionDir, 'creds.json'));
+    // Create a simplified session object for encoding
+    const sessionData = { 'creds.json': credsContent.toString('base64') };
     const fullSessionString = `botname~:${Buffer.from(JSON.stringify(sessionData)).toString('base64')}`;
     console.log('[Step 3] Session encoded successfully.');
     return fullSessionString;
@@ -57,7 +59,6 @@ router.get('/', async (req, res) => {
     sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      // Using a more common browser identity for better stability
       browser: Browsers.ubuntu("Chrome")
     });
 
@@ -68,12 +69,14 @@ router.get('/', async (req, res) => {
       console.log(`[Connection Update] Status: ${connection}`);
 
       if (connection === "open") {
-        console.log('[Step 2] Connection successful. Sending session to user...');
-        await delay(5000);
+        // --- THIS IS THE CRITICAL CHANGE ---
+        // Act immediately without any delay to prevent timeouts
+        console.log('[Step 2] Connection successful. Immediately processing session...');
 
         const sessionString = await encodeSession(sessionId);
         if (!sessionString) {
-          console.error("[Fatal] Could not generate session string.");
+          console.error("[Fatal] Could not generate session string after connection.");
+          await sock.logout(); // Logout on failure
           return;
         }
 
@@ -82,10 +85,11 @@ router.get('/', async (req, res) => {
         await sock.sendMessage(sock.user.id, { text: sessionString });
         await sock.sendMessage(sock.user.id, { text: welcomeMessage });
         
-        console.log('[Step 4] Session ID sent to user.');
-        await delay(2000);
+        console.log('[Step 4] Session ID has been sent to the user.');
+        
+        // Logout after a short delay to ensure messages are sent
+        await delay(1000); 
         await sock.logout();
-
       } else if (connection === "close") {
         const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
         console.log(`[Connection Closed] Reason: ${DisconnectReason[statusCode] || 'Unknown'}, Status Code: ${statusCode}`);
@@ -95,7 +99,7 @@ router.get('/', async (req, res) => {
     });
 
     if (!sock.authState.creds.registered) {
-      console.log(`[Step 1.5] Requesting pairing code for sanitized number: ${sanitizedNumber}...`);
+      console.log(`[Step 1.5] Requesting pairing code for: ${sanitizedNumber}...`);
       await delay(1500);
       const code = await sock.requestPairingCode(sanitizedNumber);
       console.log(`[Info] Generated Pairing Code: ${code}`);
