@@ -1,22 +1,22 @@
-import { Router } from 'express';
-import makeWASocket, {
+const { Router } = require('express');
+const {
+  default: makeWASocket, // This is the correct way to import with require
   useMultiFileAuthState,
   delay,
   Browsers,
   DisconnectReason,
-  makeCacheableSignalKeyStore // KEY CHANGE #1: Import the correct key store
-} from '@whiskeysockets/baileys';
-import { join } from 'path';
-import fs from 'fs-extra';
-import { randomBytes } from 'crypto';
-import { Boom } from '@hapi/boom';
-import pino from 'pino';
+  makeCacheableSignalKeyStore
+} = require('@whiskeysockets/baileys');
+const { join } = require('path');
+const fs = require('fs-extra');
+const { randomBytes } = require('crypto');
+const { Boom } = require('@hapi/boom');
+const pino = require('pino');
 
 const router = Router();
 const SESSIONS_DIR = join(process.cwd(), 'sessions');
 const activeSockets = new Map();
 
-// KEY CHANGE #2: This function now ONLY encodes creds.json, just like the working example.
 async function encodeSession(sessionId) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
   const credsFile = join(sessionDir, 'creds.json');
@@ -24,7 +24,6 @@ async function encodeSession(sessionId) {
   try {
     const credsContent = await fs.readFile(credsFile);
     const base64Creds = credsContent.toString('base64');
-    // Using the same format "botname~:" for compatibility.
     return `botname~:${base64Creds}`;
   } catch (error) {
     console.error('Error encoding session:', error);
@@ -54,13 +53,11 @@ router.get('/', async (req, res) => {
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    // KEY CHANGE #3: Replicate the exact logger structure.
     const logger = pino({ level: 'fatal' }).child({ level: 'fatal' });
 
     const sock = makeWASocket({
       auth: {
         creds: state.creds,
-        // KEY CHANGE #1 (Implementation): Use the stable key store method.
         keys: makeCacheableSignalKeyStore(state.keys, logger),
       },
       printQRInTerminal: false,
@@ -76,8 +73,7 @@ router.get('/', async (req, res) => {
       console.log(`[Connection Update] Number: ${sanitizedNumber}, Status: ${connection}`);
 
       if (connection === "open") {
-        // KEY CHANGE #4: Re-introduce the long delay to ensure file is written.
-        console.log('[Step 2] Connection successful. Waiting 5s for creds.json to sync...');
+        console.log('[Step 2] Connection successful. Waiting 5s...');
         await delay(5000);
 
         const sessionString = await encodeSession(sessionId);
@@ -121,4 +117,5 @@ router.get('/', async (req, res) => {
   }
 });
 
-export default router;
+// Use module.exports instead of export default
+module.exports = router;
