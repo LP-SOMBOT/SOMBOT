@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "A stable Baileys session generator.",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
